@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "sentisense": {
+      "type": "http",
+      "url": "https://app.sentisense.ai/mcp"
+    }
+  }
+}

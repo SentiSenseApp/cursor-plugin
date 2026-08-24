@@ -1,0 +1,39 @@
+{
+  "name": "stock-market-data",
+  "displayName": "SentiSense",
+  "version": "1.0.0",
+  "description": "Live US stock market research for your agent: stock sentiment, insider Form 4 trades, congressional stock trades, institutional 13F holdings, options activity, analyst ratings, earnings dates, and market mood. Sign in with your SentiSense account, no API key to paste. Read-only and free to try.",
+  "author": {
+    "name": "SentiSense"
+  },
+  "homepage": "https://sentisense.ai",
+  "repository": "https://github.com/SentiSenseApp/cursor-plugin",
+  "license": "MIT",
+  "logo": "assets/logo.png",
+  "keywords": [
+    "stocks",
+    "stock market",
+    "market data",
+    "finance",
+    "investing",
+    "trading research",
+    "stock sentiment",
+    "insider trading",
+    "congress stock trades",
+    "13f",
+    "options",
+    "earnings",
+    "analyst ratings",
+    "mcp"
+  ],
+  "category": "integrations",
+  "tags": [
+    "stocks",
+    "finance",
+    "market-data",
+    "research",
+    "mcp"
+  ],
+  "mcpServers": "./mcp.json",
+  "skills": "./skills/"
+}
