@@ -18,6 +18,13 @@ license: MIT
 **Full API reference:** https://sentisense.ai/skill.md
 **Authentication:** API key via `X-SentiSense-API-Key` header. Get a free key at https://app.sentisense.ai/get-api-key
 
+## Permissions
+
+- Network: HTTPS to app.sentisense.ai only.
+- Credentials: SENTISENSE_API_KEY from the environment.
+- Shell: none required.
+- Files: writes one HTML file the user names.
+
 ---
 
 ## You are already connected
@@ -97,7 +104,18 @@ drop it:**
   `weeklyChange: null` and a `null` `change` on every one of the six signals, so the trend arrows
   the layout depends on all disappear.
 - **`actionTypes` on analyst activity.** The bare call is mostly reiterations, which are not rating
-  changes. Without the filter the "Street moves" section is padding.
+  changes. Without the filter the "Street moves" section is padding. Size the panel for what the
+  filter actually leaves: about 83% of all actions are reiterations, so of the roughly 70 to 110
+  actions on an active market day, only **about 10 to 15 market-wide are real rating changes**.
+  A "Street moves" panel built to hold twenty rows will look empty most days and that is the data,
+  not a broken call. Ask for a multi-day window (`lookbackDays=3` or more) if you want the panel
+  full, and label the window you used.
+- **Drop rating-change rows whose grades did not move.** `actionType` comes from the research
+  provider and is not cross-checked against `fromGrade` and `toGrade`, so a few rows a week arrive
+  as an `UPGRADE` with identical grades, or an `INITIATE` that still carries a `fromGrade`. In a
+  dense dashboard row that renders as "UPGRADE Buy to Buy", which reads as a bug in your dashboard.
+  Filter to rows where `fromGrade != toGrade` before rendering the transition, and keep the
+  unfiltered count if you also show a total.
 
 Several v1 endpoints wrap the payload as `{ isPreview, previewReason, data }`; read `data`. The
 movers, options, insider, politicians, flows, analyst and earnings calls all do. Market mood,
@@ -297,6 +315,10 @@ Natural additions once the base page works, each one more call and one more sect
 positioning and IV rank, congressional and insider trades on the watchlist names, news stories per
 ticker, a sentiment leaderboard of the most bullish and bearish names. Add them as sections in the
 same file rather than splitting into multiple pages.
+
+For "show the broader market", hand off to the `market-heatmap` skill when available. Pass the desired scope, metric, and watchlist context. Return a market treemap with coverage and as-of labels. Hand off only when the user changes the question; do not automatically route back. If the sibling is unavailable, answer the supported part here using a connected tool or the inline REST workflow, state any remaining gap, and never require an install.
+
+The heatmap sibling is not bundled here. Use a connected tool or the inline REST market-data reads for a bounded context section; state if the treemap needs the separately available skill. Do not require an install to finish the dashboard.
 
 **Keep it one file.** The moment it needs a bundler it stops being the thing that makes this
 useful, which is that anyone can generate one, email it, and have it open on the other end.

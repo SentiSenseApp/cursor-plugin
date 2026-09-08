@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.0
+
+- Refreshes the six bundled skills, including the terminal skill's new build kit.
+- Removes the npx execution path and declares permissions in every skill.
+
 ## 1.0.0
 
 First release.

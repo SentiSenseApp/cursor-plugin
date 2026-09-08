@@ -20,7 +20,7 @@ Reach for this skill when the question is about perception, positioning, or sign
 - "What is the pre-earnings sentiment setup on $AAPL?"
 - "What is the AI insight on $MSFT, and what are people saying in the news?"
 
-This skill complements the rest of the SentiSense collection rather than competing with it. It owns the signal read: what the market feels and where the money is moving. `stocks-analysis`, bundled in this plugin, owns the judgment layer: when a quick read turns thesis-shaped, hand it off there for the adversarial deep dive. `stock-terminal`, also bundled, is the one to reach for when the answer should be a terminal-style screen rather than a chat reply. For any endpoint or response shape not covered below, the full API reference lives at https://sentisense.ai/skill.md.
+For "does this change my thesis?", hand off to the `stocks-analysis` skill when available. Pass the ticker, user thesis, horizon, and dated signal disagreements. Return an evidence-led bull/bear assessment and unresolved objections. Hand off only when the user changes the question; do not automatically route back. If the sibling is unavailable, answer the supported part here using a connected tool or the inline REST workflow, state any remaining gap, and never require an install.
 
 Do not use it for order entry, portfolio management, or personalized advice. It has no write, trading, or wallet surface; every endpoint is a GET.
 
@@ -45,6 +45,13 @@ question the connected tools can already answer.
 - A free `SENTISENSE_API_KEY`. Get one at https://app.sentisense.ai/get-api-key. The key is required on every call; anonymous requests return `401 api_key_required`.
 - Network access to `https://app.sentisense.ai`.
 - Read-only scope. Every endpoint here is a GET. Nothing this skill does can place a trade, move money, or modify account state.
+
+## Permissions
+
+- Network: HTTPS to app.sentisense.ai only.
+- Credentials: SENTISENSE_API_KEY from the environment.
+- Shell: none required.
+- Files: none.
 
 Tiers:
 
@@ -76,6 +83,8 @@ An anonymous call returns `401 api_key_required`. A rate-limited call returns `4
 
 On Windows, use the bundled Python client (cross-platform) and reference the key as `%SENTISENSE_API_KEY%` (cmd) or `$env:SENTISENSE_API_KEY` (PowerShell) rather than the POSIX `$SENTISENSE_API_KEY` shown above.
 
+The REST recipe in this file is the primary path. A maintained command-line client is available as the separate `sentisense-cli` skill for hosts that prefer one.
+
 Two response envelopes exist; unwrap correctly before reading fields:
 
 - Read FLAT (top-level, no `.data`): `stocks/price`, `stocks/prices`, `stocks/chart`, `stocks/popular`, `stocks/{T}/profile`, `market-mood`, and the metric series (`sentiment`, `sentisense`, `mentions`, and `social_dominance` are bare arrays). `institutional/quarters` is also a bare array.
@@ -84,22 +93,36 @@ Two response envelopes exist; unwrap correctly before reading fields:
 
 When unsure, accept both: `rows = raw if isinstance(raw, list) else raw.get("data", raw)`.
 
-An optional stdlib helper, `scripts/sentiment_client.py`, wraps all of this: it injects the auth header, prepends the base URL, and normalizes both envelopes (including the nested sentiment scalar) so the agent reasons over clean values. Use it or plain `curl`, whichever fits the host. The core of the helper is small enough to inline:
+An optional stdlib helper, `scripts/sentiment_client.py`, wraps all of this: it injects the auth header, prepends the base URL, and normalizes both envelopes (reading the metric scalar from the flat `value`) so the agent reasons over clean values. Use it or plain `curl`, whichever fits the host. The core of the helper is small enough to inline:
 
 ```python
 #!/usr/bin/env python3
 """Minimal stdlib client for the read-only SentiSense API."""
 import json, os, urllib.parse, urllib.request
 
-BASE = "https://app.sentisense.ai"
+API_ORIGIN = "https://app.sentisense.ai"
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+def sentisense_api_url(path, params=None):
+    url = urllib.parse.urljoin(API_ORIGIN + "/", path)
+    parsed = urllib.parse.urlparse(url)
+    if (parsed.scheme != "https" or parsed.hostname != "app.sentisense.ai"
+            or parsed.netloc != "app.sentisense.ai"
+            or parsed.username is not None or parsed.password is not None
+            or parsed.port is not None):
+        raise ValueError("API URL must use https://app.sentisense.ai with no credentials or port")
+    if params:
+        url += ("&" if parsed.query else "?") + urllib.parse.urlencode(params)
+    return url
 
 def get(path, **params):
-    url = BASE + path
-    if params:
-        url += "?" + urllib.parse.urlencode(params)
+    url = sentisense_api_url(path, params)
     req = urllib.request.Request(
         url, headers={"X-SentiSense-API-Key": os.environ["SENTISENSE_API_KEY"]})
-    with urllib.request.urlopen(req, timeout=20) as r:
+    with urllib.request.build_opener(NoRedirect).open(req, timeout=20) as r:
         return json.load(r)
 
 def rows(raw):
@@ -110,12 +133,14 @@ def rows(raw):
         return raw["data"]
     return raw
 
-def latest_sentiment(ticker):
-    """Latest sentiment polarity in [-1, 1]; the scalar is nested at metricValue.value.value."""
-    series = get(f"/api/v2/metrics/entity/{ticker}/metric/sentiment")
-    if not series:
+def latest_metric(ticker, slug="sentiment"):
+    """Latest reading of any metric series. Read the flat top-level `value`: it is present
+    on every point and holds the scalar, while the nested metricValue is a dict for value
+    metrics and a bare number for count metrics like `mentions`."""
+    series = get(f"/api/v2/metrics/entity/{ticker}/metric/{slug}")
+    if not series or series[-1].get("value") is None:
         return None
-    return float(series[-1]["metricValue"]["value"]["value"])
+    return float(series[-1]["value"])
 ```
 
 ```bash
@@ -128,16 +153,28 @@ python scripts/sentiment_client.py mood
 All paths are relative to `https://app.sentisense.ai` and are GET. Every call requires the `X-SentiSense-API-Key` header. `{T}` is an uppercase ticker, `{slug}` a member slug, `{id}` a story id. Full schema: https://sentisense.ai/skill.md.
 
 ```
+RESOLVE A NAME (only when the user typed a company or fund name, not a symbol)
+  GET /api/v1/kb/entities/search?q={name}&type=company&limit=5
+        Bare array of {name, urlSlug, type, ticker}, best match first. Take the first match with a
+        non-null ticker. Use type=etf for fund names (SPY resolves only there). See Pitfalls.
+
 SENTIMENT & MOOD
   GET /api/v2/metrics/entity/{T}/metric/sentiment?startTime={epochMs}&endTime={epochMs}
         Sentiment polarity time series. Omit params for the server default 7-day window.
-        Bare array; latest scalar is series[-1].metricValue.value.value (a float in [-1, 1]).
+        Bare array; latest scalar is series[-1].value (a float in [-1, 1]). Every series
+        below reads the same way: take the flat top-level value, not the nested metricValue,
+        whose depth differs between value metrics and count metrics.
   GET /api/v2/metrics/entity/{T}/metric/sentisense
         The SentiSense Score (unbounded composite; report as-is, never normalize to 0-100).
   GET /api/v2/metrics/entity/{T}/metric/mentions
         Mention-volume time series (how much a ticker is being talked about).
   GET /api/v2/metrics/entity/{T}/metric/social_dominance
         Share-of-conversation time series (a ticker's dominance of the chatter).
+  GET /api/v2/metrics/entity/{E}/metric/app_review_count
+        New Apple App Store reviews per day for a product's iOS app. Products with a
+        tracked app only, so {E} is a product entity slug, never a ticker.
+  GET /api/v2/metrics/entity/{E}/metric/app_rating
+        Mean star rating (1 to 5) of that day's new App Store reviews. Same coverage.
   GET /api/v2/market-mood
         Composite fear/greed plus sub-signals and per-sector breakdowns. Flat, but the
         composite is nested: market.currentScore, market.phase, market.weeklyChange,
@@ -182,7 +219,7 @@ SUPPORTING  (price, prices, chart are 15-minute delayed; profile, popular, calen
   GET /api/v1/market-summary                                Market-wide narrative headline.
 ```
 
-Sentiment is polarity: a float in [-1, 1] where the sign is the direction (negative is bearish and meaningful, positive is bullish) and the magnitude is conviction. Represent the sign unmistakably; do not map it onto a 0-100 scale. The SentiSense Score is a separate, unbounded composite; report it as-is. Mentions and social dominance are their own metric series on the same `/metric/{metricType}` endpoint (`mentions` for talk volume, `social_dominance` for share of the conversation); all four series (`sentiment`, `sentisense`, `mentions`, `social_dominance`) are available on the Free tier, and like every metrics call each request counts against your monthly quota. A separate `/api/v2/metrics/entity/{T}/distribution/{metricType}` endpoint breaks a metric down by source (share of voice, a "where this signal came from" view, not per-source sentiment values).
+Sentiment is polarity: a float in [-1, 1] where the sign is the direction (negative is bearish and meaningful, positive is bullish) and the magnitude is conviction. Represent the sign unmistakably; do not map it onto a 0-100 scale. The SentiSense Score is a separate, unbounded composite; report it as-is. Mentions and social dominance are their own metric series on the same `/metric/{metricType}` endpoint (`mentions` for talk volume, `social_dominance` for share of the conversation); all four series (`sentiment`, `sentisense`, `mentions`, `social_dominance`) are available on the Free tier, and like every metrics call each request counts against your monthly quota. Two more Free-tier series cover consumer products rather than tickers: `app_review_count` (new Apple App Store reviews for a product's iOS app that day) and `app_rating` (the mean star rating, 1 to 5, of those reviews). **From 2026-09-05 `mentions` excludes App Store reviews**, because a review is a rating rather than chatter and for review-heavy products the two read as one number; the App Store slice still appears under `distribution/mentions?dimension=source`, so read review volume from `app_review_count`. A separate `/api/v2/metrics/entity/{T}/distribution/{metricType}` endpoint breaks a metric down by source (share of voice, a "where this signal came from" view, not per-source sentiment values).
 
 ## Workflows
 
@@ -192,7 +229,7 @@ Opinionated recipes. Each fans out its independent calls in parallel, then synth
 
 Answer "what is the market feeling about $T" in a few dense lines. Fire these in parallel:
 
-1. `GET /api/v2/metrics/entity/{T}/metric/sentiment` for the polarity trend (server default 7-day window; the latest scalar is `series[-1].metricValue.value.value`, a float in [-1, 1]).
+1. `GET /api/v2/metrics/entity/{T}/metric/sentiment` for the polarity trend (server default 7-day window; the latest scalar is `series[-1].value`, a float in [-1, 1]).
 2. `GET /api/v2/metrics/entity/{T}/metric/sentisense` for the composite score.
 3. `GET /api/v1/documents/ticker/{T}?limit=8` for mention volume (`totalCount`) and the sentiment-tagged feed.
 4. `GET /api/v1/insights/stock/{T}` for the top AI insight (`data[0].insightText`, with `generatedAt` for freshness).
@@ -211,11 +248,13 @@ The response is flat, but the composite is nested under `market`, not the root: 
 
 Find tickers where insider buying, congressional purchases, and analyst upgrades line up in the same window; convergence is the signal a quote feed cannot produce.
 
-1. `GET /api/v1/insider/cluster-buys?lookbackDays=7`.
-2. `GET /api/v1/politicians/activity?lookbackDays=7`, keeping rows with `transactionType == "PURCHASE"`.
-3. `GET /api/v1/analyst/activity?lookbackDays=7&actionTypes=UPGRADE` (server-side filter; also accepts a CSV like `UPGRADE,DOWNGRADE,INITIATE`).
+1. `GET /api/v1/insider/cluster-buys?lookbackDays=30`.
+2. `GET /api/v1/politicians/activity?lookbackDays=30`, keeping rows with `transactionType == "PURCHASE"`.
+3. `GET /api/v1/analyst/activity?lookbackDays=30&actionTypes=UPGRADE` (server-side filter; also accepts a CSV like `UPGRADE,DOWNGRADE,INITIATE`).
 
-All three are wrapped: read `.data`. Intersect the three ticker lists and report names appearing in two or more buckets, ranked by total signal count, with a one-liner each: "$NVDA: 4 insiders bought, 1 congressional purchase, 2 analyst upgrades (7d)." If a 7-day bucket returns an empty array (common on quiet weeks; `isPreview:false`, disclosure lag, not an error), widen that specific call to `lookbackDays=30` and note the wider window rather than showing a blank result. For one ticker's full flow, run `insider/trades/{T}`, `politicians/filings/{T}`, `institutional/quarters` then `institutional/holders/{T}?reportDate={Q}`, and `analyst/{T}/actions`. Present as observed positioning, never as advice.
+All three are wrapped: read `.data`. Intersect the three ticker lists and report names appearing in two or more buckets, ranked by total signal count, with a one-liner each: "$NVDA: 4 insiders bought, 1 congressional purchase, 2 analyst upgrades (30d)."
+
+**Start this one at `lookbackDays=30`, not 7.** A 7-day window is too narrow for three slow feeds to overlap: on a representative run it returned 1 cluster-buy ticker, 1 congressional purchase ticker and 21 upgraded tickers, which intersected to **zero** names in two or more buckets. The same three calls at 30 days returned 8, 65 and 45 tickers and produced 7 convergent names. The trap is that no individual bucket was empty at 7 days, so an "is this bucket empty" check passes on all three and you still report nothing found. **Widen when the INTERSECTION is thin, not when a bucket is empty**, and say which window you used. Also expect the three-way overlap to be empty even at 30 days: two-of-three is the working bar for this screen, and requiring all three will show a blank almost every time. A genuinely empty bucket (quiet week, disclosure lag) is `isPreview:false` and not an error either way. For one ticker's full flow, run `insider/trades/{T}`, `politicians/filings/{T}`, `institutional/quarters` then `institutional/holders/{T}?reportDate={Q}`, and `analyst/{T}/actions`. Present as observed positioning, never as advice.
 
 ### 4. Pre-earnings sentiment check
 
@@ -242,11 +281,12 @@ Frame the result as an observed divergence, not a signal to act: "Bullish diverg
 
 ## Pitfalls
 
+- **Company names are not tickers.** When the user names the company ("sentiment on tesla", "is the mood on alphabet bullish") instead of typing a symbol, resolve it first with `GET /api/v1/kb/entities/search?q={name}&type=company&limit=5`: a bare array of `{name, urlSlug, type, ticker}`, best match first (`type=etf` for a fund, since `SPY` resolves only there). Take the first match with a non-null `ticker`; a tracked subsidiary or private company can outrank its listed parent ("google" returns Google LLC with `ticker: null` before Alphabet `GOOGL`). Several plausible ticker-bearing matches means ask a one-line clarification; an empty array means say so. Never uppercase the word and hope: `$TESLA` fails the metric series with `404 entity_not_found` (that error carries up to three `suggestions`, which is a resolution hint, not data), while the smart-money feeds return an empty `data: []` that reads like a quiet name when the real failure was the identifier. An exact ticker the user typed skips this step, and one resolution call per name covers the whole session.
 - **Nothing here is real time.** Sentiment, the SentiSense Score, mentions, share of voice, news clustering, and AI insights are batch metrics computed on a schedule; quote, price, and chart points are the fresher class but carry a 15-minute delay. State a batch value with its `generatedAt` age, annotate price with `priceAsOf` where present, and never label either "real time."
 - **Empty smart-money windows are normal.** The 7-day insider and congressional feeds often return empty arrays on quiet weeks (disclosure lag, `isPreview:false`, not an error). Widen that specific call to `lookbackDays=30` and note the wider window rather than showing a blank result.
 - **Preview gating is data, not failure.** On the free tier, preview-gated endpoints return `isPreview:true` with a real truncated slice (for example the top 3 insights, the current earnings week, a sliced holder list). Render the slice as the answer and tag it `(preview)`. Mention PRO only when the truncation is materially limiting the answer.
 - **Wrap versus flat differs by endpoint.** Reading `.data` on a flat endpoint (or the reverse) yields nothing. Flat: `stocks/price`, `stocks/prices`, `stocks/chart`, `stocks/popular`, `stocks/{T}/profile`, `market-mood`, the `sentiment`, `sentisense`, `mentions`, and `social_dominance` series, and `institutional/quarters`. Wrapped under `.data`: `insider/*`, `politicians/*`, `institutional/holders`, `analyst/*`, `insights/*`, and `calendar/earnings`. When unsure, accept both.
-- **The sentiment scalar is nested.** The series is a bare array and the float lives at `series[i].metricValue.value.value`; `series[i].metricValue.value` is itself a dict, so there is no top-level `series[i].value` shortcut.
+- **Read the metric scalar from the flat `value`.** Every point in a metric series carries a top-level `series[i].value` alongside the nested `metricValue`, and it holds the reading: the polarity for `sentiment`, the composite for `sentisense`, the count for `mentions`, the share for `social_dominance`. Prefer it, because the nested depth is **not** the same for every metric. A value metric (`sentiment`, `sentisense`, `social_dominance`) nests at `metricValue.value.value` because `metricValue.value` is itself a dict; a count metric (`mentions`) is `{"type":"CountMetricValue","value":36,"count":36}`, so `metricValue.value` is already the integer and `metricValue.value.value` throws. The flat field spares you the branch. A point with no reading omits `value`; skip that point rather than reading it as zero.
 - **Congress and insider use different verbs.** Insider rows carry `transactionType` BUY or SELL; congressional rows carry PURCHASE or SALE. Filter each with its own vocabulary.
 - **Not every insider SELL is a sale.** `transactionType` is a simplified rollup of the SEC's one-letter codes, and code `F` lands on `SELL`: those are shares the company withheld to cover the insider's taxes when a grant vested. Nobody chose to sell and no shares reached the market. On companies that grant heavily this is the majority of the reported "sold" dollars, so a bearish read built on a raw `SELL` filter is describing a vesting schedule. Read `transactionCode` and drop `F` before you tally selling. The market-wide `/insider/activity` rollup already excludes it for you; `/insider/trades/{T}` returns every filed row, so there you filter yourself.
 - **Always fetch quarters first.** Call `institutional/quarters` and pass the `reportDate` of the first quarter whose `pending` is not true to `institutional/holders`; skip any `pending:true` entry (within ~45 days of a quarter close the most-recent quarter is still filing and holds almost no holders), and fall back to `[0]` only if every entry is `pending:true`. Never hardcode a quarter.
@@ -259,7 +299,7 @@ Frame the result as an observed divergence, not a signal to act: "Bullish diverg
 Confirm the skill is wired correctly before trusting a synthesis:
 
 1. **Reachability and auth.** Every endpoint here takes an API key, so one call checks both: `curl -s -o /dev/null -w "%{http_code}" -H "X-SentiSense-API-Key: $SENTISENSE_API_KEY" "https://app.sentisense.ai/api/v2/market-mood"`. A `200` confirms the base URL, the network, the header and the key. A `401 api_key_required` means the header or `SENTISENSE_API_KEY` is missing; a `401 invalid_api_key` means the key itself is wrong or revoked; a `429` means the per-minute rate was exceeded, so honor the `Retry-After` hint.
-2. **Sentiment parses.** Fetch `/api/v2/metrics/entity/AAPL/metric/sentiment`, confirm a non-empty array, and read `series[-1].metricValue.value.value`; it should be a float in [-1, 1]. A value outside that range means the wrong nesting was read.
+2. **Sentiment parses.** Fetch `/api/v2/metrics/entity/AAPL/metric/sentiment`, confirm a non-empty array, and read `series[-1].value`; it should be a float in [-1, 1]. A value outside that range means the wrong field was read.
 3. **Mood nests as expected.** Fetch `/api/v2/market-mood` and confirm `market.currentScore`, `market.phase`, and `market.weeklyChange` are present (not at the root), and that `sectors` is a populated dict.
 4. **Envelope check.** Confirm `institutional/quarters` parses as a bare array and `insider/cluster-buys?lookbackDays=30` parses as `{ isPreview, data }` with `data` an array (an empty array on a quiet window is a valid result, not a failure).
 5. **Freshness is surfaced.** Any batch value presented to the user carries its `generatedAt`; if a synthesis omits the age on a sentiment or insight figure, or describes a batch surface as real time, it is not verified.
