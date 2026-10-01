@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.0
+
+- Refreshes the bundled skills: clearer handling of free-tier previews (partial results are labelled, never read as "nothing happened"), steadier terminal snapshots, and updated sentiment guidance.
+
 ## 1.1.0
 
 - Refreshes the six bundled skills, including the terminal skill's new build kit.
