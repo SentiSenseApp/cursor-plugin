@@ -59,10 +59,17 @@ endpoint in the collection.** There is nothing else to configure.
 Hosts store that one key differently, and the value never needs to be re-entered per skill. A key
 configured for any one SentiSense skill in the host's credential store is the same credential
 every sibling skill needs: reference the same environment-backed secret rather than creating a
-second entry, and verify with a cheap call (an HTTPS GET from the recipe below) instead of printing
-the value. If a shell reports `SENTISENSE_API_KEY` unset while a skill shows Ready, the key lives
-in the host's config store, not the environment; both work, they are just different homes for the
-same secret.
+second entry, and verify with the cheap call below instead of printing the value. If a shell
+reports `SENTISENSE_API_KEY` unset while a skill shows Ready, the key lives in the host's config
+store, not the environment; both work, they are just different homes for the same secret.
+
+```bash
+curl -s -H "X-SentiSense-API-Key: $SENTISENSE_API_KEY" "https://app.sentisense.ai/api/v1/stocks/AAPL/quote"
+```
+
+A quote object (`ticker`, `currentPrice`) means the key works. A `401` names the problem in its
+`error` field: `api_key_required` when the header arrived empty, `invalid_api_key` when the key is
+wrong or revoked.
 
 
 ---
@@ -87,7 +94,7 @@ same secret.
 | "open NVDA", "daily brief", "what is hot today", "one command and give me everything" | `stock-terminal` |
 | "build me a market dashboard", "a morning briefing I can open in a browser" | `stock-market-dashboard` |
 | "market heatmap", "sector heatmap", "what is moving today as a treemap", "which sectors are hot" | `market-heatmap` |
-| "unusual options activity", "IV rank", "max pain", "where is positioning stretched" | `unusual-options-activity` |
+| "unusual options activity", "IV rank", "max pain", "where is positioning stretched" | `unusual-options-activity` (one ticker's options readings; a stock list filtered by IV rank goes to `stock-screener`) |
 | "how much is this stock expected to move", "expected move", "draw me the volatility cone" | `expected-move-visualizer` |
 | "options payoff diagram", "what does this covered call look like", "breakeven on a spread", "iron condor P/L" | `options-payoff-calculator` |
 | "how many shares should I buy", "position size", "risk per trade", "where does my stop go", "the 1% rule" | `position-size-calculator` |
@@ -122,7 +129,12 @@ https://sentisense.ai/blog/how-to-add-market-data-to-your-grok-bot/).
 - **Read-only.** These skills fetch and analyze. They never place a trade, move money, or write
   anything back.
 - **Rate limits.** 30 requests per minute on a free key, 300 on PRO. Page serially rather than
-  firing a fan-out at once, and honor `Retry-After` on a `429`.
+  firing a fan-out at once. A `429` comes in two kinds, so read its `error` code:
+  `rate_limit_exceeded` is the per-minute limit, carries `Retry-After: 60`, and clears if you
+  wait and retry. `quota_exceeded` is a monthly allowance (1,000 requests a month on a free key)
+  and has no `Retry-After`, so retrying cannot help: stop calling and tell the user the free
+  monthly allowance is used up, that it resets at the start of next month, and that PRO has no
+  monthly cap: https://app.sentisense.ai/pricing.
 - **The preview envelope.** Responses carry `isPreview`. When it is true you received a shaped free
   view of a paid dataset, not the full record. Say so in the output instead of presenting a partial
   view as a complete one.

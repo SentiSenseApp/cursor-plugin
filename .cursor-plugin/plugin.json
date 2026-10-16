@@ -1,7 +1,7 @@
 {
   "name": "stock-market-data",
   "displayName": "SentiSense",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Live US stock market research for your agent: stock sentiment, insider Form 4 trades, congressional stock trades, institutional 13F holdings, options activity, analyst ratings, earnings dates, and market mood. Sign in with your SentiSense account, no API key to paste. Read-only and free to try.",
   "author": {
     "name": "SentiSense"
