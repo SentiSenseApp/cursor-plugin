@@ -38,7 +38,7 @@ A local app needs its own authorized server-side connection; it cannot inherit t
 **Base URL:** `https://app.sentisense.ai`.
 **Full API reference:** https://sentisense.ai/skill.md.
 Authenticate requests with `X-SentiSense-API-Key`, read from `SENTISENSE_API_KEY` in the environment.
-Get a free key at https://app.sentisense.ai/get-api-key. Never print it or put it in URLs, artifacts, or renderer code.
+Get a free key at https://app.sentisense.ai/get-api-key. No key yet? Follow "No key yet" in the `0-sentisense-onboarding` skill: one POST returns a temporary free key the agent can use right away and a link the user opens to keep it. Never print it or put it in URLs, artifacts, or renderer code.
 Any HTTPS client works; no SDK is required.
 
 The permissions below cover answering market-data turns. An explicit application-building request uses the host's separately authorized development tools.

@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.2
+
+- Every bundled skill now works for an agent with no API key yet: the key is optional to load the skill, and a pointer leads to a temporary free key with no signup plus a link the user opens to keep it.
+
 ## 1.2.0
 
 - Refreshes the bundled skills: clearer handling of free-tier previews (partial results are labelled, never read as "nothing happened"), steadier terminal snapshots, and updated sentiment guidance.
