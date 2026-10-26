@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.3
+
+- The stock sentiment skill adds two App Store series for product apps, every new rating per day and its mean star rating, beside the written-review count and rating, and says that App Store reviews are left out of the mentions source split.
+
 ## 1.2.2
 
 - Every bundled skill now works for an agent with no API key yet: the key is optional to load the skill, and a pointer leads to a temporary free key with no signup plus a link the user opens to keep it.
